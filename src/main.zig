@@ -3,10 +3,10 @@ const std = @import("std");
 
 const allocator = std.heap.page_allocator;
 
-const file_path = "/home/vinicius/dotconfigs/scripts/.scripts/2in1screen/state";
+const file_path = "$HOME/.cache/sr_state";
 const State = struct { auto_rotate: bool, auto_save: bool, prev_state: u8 };
 
-const Resolution = .{ "1920x1080", "1920x1080", "1920x1080", "1920x1080" };
+const Resolution = [_][]const u8{ "1920x1080", "1920x1080", "1920x1080", "1920x1080" };
 
 const RES = [_][]const u8{ "1920x1080", "1920x1080", "1920x1080", "1920x1080" };
 const ROT = [_][]const u8{ "normal", "inverted", "left", "right" };
@@ -21,7 +21,7 @@ fn get_saved_state() !State {
 
     const byte = buff[0] - '0';
 
-    return State{ .prev_state = byte & 3, .auto_rotate = (byte >> 2 & 1) != 0, .auto_save = true };
+    return State{ .prev_state = byte & 3, .auto_rotate = ((byte >> 2) & 1) != 0, .auto_save = true };
 }
 
 fn save_state(s: State) !void {
