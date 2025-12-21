@@ -1,0 +1,7 @@
+.{
+    .name = .zig_refactor,
+    .version = "0.0.1",
+    .minimum_zig_version = "0.15.2",
+    .paths = .{""},
+    .fingerprint = 0x6be02ee588db91a5,
+}
