@@ -1,19 +1,48 @@
 const std = @import("std");
+const clap = @import("clap");
 
-const allocator = std.heap.page_allocator;
+const TOUCHSCREEN_DEVICE_NAME = "GXTP7936:00 27C6:0123";
+const CLEAR_LINE = "\r\x1b[2K";
 
-const file_path = "$HOME/.cache/sr_state";
+const Mode = enum { automatic, manual };
+const State = struct {
+    mode: Mode,
+    anounce: bool,
+    to_set: bool,
+    end_all: bool,
 
-const State = struct { auto_rotate: bool };
-var state = State{ .auto_rotate = false };
+    const Self = @This();
+
+    pub fn change_mode(self: *Self, mode: Mode) void {
+        @atomicStore(Mode, &self.mode, mode, .seq_cst);
+        @atomicStore(bool, &self.anounce, true, .seq_cst);
+    }
+
+    pub fn toggle_mode(self: *Self) void {
+        @atomicStore(
+            Mode,
+            &self.mode,
+            switch(state.mode) { .automatic => .manual, .manual => .automatic },
+            .seq_cst
+        );
+        @atomicStore(bool, &self.anounce, true, .seq_cst);
+    }
+
+    pub fn set(self: *Self) void {
+        @atomicStore(Mode, &self.mode, Mode.manual, .seq_cst);
+        @atomicStore(bool, &self.anounce, true, .seq_cst);
+        @atomicStore(bool, &self.to_set, true, .seq_cst);
+    }
+
+    pub fn stop_app(self: *Self) void {
+        @atomicStore(bool, &self.end_all, true, .seq_cst);
+    }
+};
 
 const Accell = struct { x: f64, y: f64, z: f64 };
 
 const Direction = enum {
-    up,
-    right,
-    down,
-    left,
+    up, right, down, left,
 
     const Self = @This();
     fn to_string(self: Self) []const u8 {
@@ -35,6 +64,12 @@ const Direction = enum {
     }
 };
 
+const debug = false;
+
+const allocator = std.heap.page_allocator;
+const file_path = "$HOME/.cache/sr_state";
+var state = State{ .mode = .manual, .anounce = false, .to_set = false, .end_all = false };
+
 fn rotate_screen(direction: Direction) !void {
     const shell = struct { fn shell(cmd: []const []const u8) !void {
         var child = std.process.Child.init(cmd, allocator);
@@ -44,12 +79,16 @@ fn rotate_screen(direction: Direction) !void {
     try shell(&[_][]const u8{ "xrandr", "-o", direction.to_xrandr_rot_ref(), "-s", "1920x1080" });
     // try shell(&[_][]const u8{ "xinput", "set-prop", "GXTP7936:00 27C6:0123", "\"Coordinate Transformation Matrix\"", direction.to_xrandr_rot_ref() });
 
+    const touch_device = TOUCHSCREEN_DEVICE_NAME;
+
     switch(direction) {
-        .up => try shell(&[_][]const u8{ "xinput", "set-prop", "GXTP7936:00 27C6:0123", "189", "1", "0", "0", "0", "1", "0", "0", "0", "1" }),
-        .down => try shell(&[_][]const u8{ "xinput", "set-prop", "GXTP7936:00 27C6:0123", "189", "-1", "0", "1", "0", "-1", "1", "0", "0", "1" }),
-        .right => try shell(&[_][]const u8{ "xinput", "set-prop", "GXTP7936:00 27C6:0123", "189", "0", "-1", "1", "1", "0", "0", "0", "0", "1" }),
-        .left => try shell(&[_][]const u8{ "xinput", "set-prop", "GXTP7936:00 27C6:0123", "189", "0", "1", "0", "-1", "0", "1", "0", "0", "1" })
+        .up => try shell(&[_][]const u8{ "xinput", "set-prop", touch_device, "189", "1", "0", "0", "0", "1", "0", "0", "0", "1" }),
+        .down => try shell(&[_][]const u8{ "xinput", "set-prop", touch_device, "189", "-1", "0", "1", "0", "-1", "1", "0", "0", "1" }),
+        .right => try shell(&[_][]const u8{ "xinput", "set-prop", touch_device, "189", "0", "-1", "1", "1", "0", "0", "0", "0", "1" }),
+        .left => try shell(&[_][]const u8{ "xinput", "set-prop", touch_device, "189", "0", "1", "0", "-1", "0", "1", "0", "0", "1" })
     }
+
+    try shell(&[_][]const u8{ "bash", "-c", "$HOME/.scripts/wallpaper/change_wallpaper_feh.sh $HOME/.background" });
 
     // try shell(&[_][]const u8{ "xinput", "set-prop", "GXTP7936:00 27C6:0123", "189", direction.to_input_transform_matrix() });
 }
@@ -136,64 +175,338 @@ fn wait_for_seconds(seconds: usize) void {
     std.debug.print("\n", .{});
 }
 
-pub fn main() !void {
-    std.debug.print("\n", .{});
-    const sensor = find_acelerometer() catch return;
+pub fn file_exists(path: []const u8) bool {
+    std.fs.accessAbsolute(path, .{ .mode = .read_only }) catch return false;
+    return true;
+}
 
-    var acc: Accell = undefined;
-
-    var last: Direction = .up;
-    var current: Direction = .up;
-
-    var i: usize = 0;
-
-    while(true) {
-        acc = try get_acceleration(sensor);
-
-        if(@abs(acc.y) >= @abs(acc.x)) { // horizontal
-            current = if(acc.y < 0) .up else .down;
-        } else { // vertical
-            current = if(acc.x < 0) .left else .right;
-        }
-        
-        std.debug.print("\r\x1b[2KState: {s} {{{any}}} ", .{ current.to_string(), acc });
-
-        for(0..i+1) |_| { std.debug.print(".", .{}); }
-        i = (i + 1) % 3;
-
-        std.Thread.sleep(100*std.time.ns_per_ms);
-
-        if(last != current) {
-            std.debug.print("Rotating {s}...\n", .{ current.to_string() });
-            try rotate_screen(current);
-            last = current;
-        }
+fn signal_handler(sig: i32) callconv(.c) void {
+    std.debug.print("{s}", .{ CLEAR_LINE });
+    switch(sig) {
+        std.posix.SIG.USR1 => { state.toggle_mode(); },
+        std.posix.SIG.USR2 => { state.set(); },
+        std.posix.SIG.QUIT,
+        std.posix.SIG.KILL,
+        std.posix.SIG.INT => { state.stop_app(); },
+        else => unreachable
     }
+}
 
-    const usrHandler = struct {
-        fn usrHandler(sig: i32, info: *const std.posix.siginfo_t, _: ?*anyopaque) callconv(.C) void {
-            _  = info;
-            std.debug.print("sig: {}\n", .{ sig });
-            switch(sig) {
-                std.posix.SIG.USR1 => { std.debug.print("\n\nUSR1\n", .{}); state.auto_rotate = true; },
-                std.posix.SIG.HUP => { std.debug.print("\n\nHUP\n", .{}); state.auto_rotate = false; },
-                std.posix.SIG.QUIT, std.posix.SIG.KILL => { std.debug.print("\n\nQUIT, KILL\n", .{}); std.posix.exit(0); },
-                else => unreachable
-            }
-        }
-    }.usrHandler;
-
-    // Define the sigaction structure
+fn handle_signals(sigs: []const u8, cbk: ?*const fn(i32) callconv(.c) void) void {
     var sa: std.posix.Sigaction = .{
-        .handler = .{ .handler = usrHandler },
-        .mask = std.posix.empty_sigset,
+        .handler = .{ .handler = cbk },
+        .mask = [1]c_ulong{ 0 },
         .flags = std.posix.SA.RESTART,
     };
 
-    // Register the handler for SIGUSR1
-    try std.posix.sigaction(std.posix.SIG.USR1, &sa, null);
-    try std.posix.sigaction(std.posix.SIG.HUP, &sa, null);
-    try std.posix.sigaction(std.posix.SIG.HUP, &sa, null);
+    for(sigs) |sig| { std.posix.sigaction(sig, &sa, null); }
+}
+
+const Client = struct {
+    thread: std.Thread,
+    stream: std.net.Stream,
+    done: bool,
+};
+
+fn usage(name: []u8) noreturn {
+    std.debug.print("usage: {s} <command> [<params>] \n", .{name});
+    std.posix.exit(0);
+}
+
+pub fn main() !void {
+    std.debug.print("\n", .{});
+    defer std.debug.print("\n", .{});
+
+    const argsZ = try std.process.argsAlloc(allocator);
+    const program_name = argsZ[0][0..argsZ[0].len];
+
+    const RunMode = enum { daemon, client, interactive };
+    var run_mode: RunMode = .daemon;
+
+    if(argsZ.len > 1) {
+        const command = argsZ[1][0..argsZ[1].len];
+        if(std.mem.eql(u8, "daemon", command)) {
+            run_mode = .daemon;
+        } else if(std.mem.eql(u8, "interactive", command)) {
+            run_mode = .interactive;
+        } else if(std.mem.eql(u8, "client", command)) {
+            run_mode = .client;
+        } else usage(program_name);
+    } else usage(program_name);
+
+    const socket_path = "/tmp/my_unix_socket.sock";
+
+    const socket_exists = file_exists(socket_path);
+    const exec_name = std.fs.path.basename(program_name);
+
+    handle_signals(&[_]u8{
+        std.posix.SIG.USR1,
+        std.posix.SIG.USR2,
+        std.posix.SIG.QUIT,
+        std.posix.SIG.INT,
+    }, signal_handler);
+
+    switch(run_mode) {
+        .daemon => {
+            std.debug.print("{s}: server mode", .{exec_name});
+            if(socket_exists) return error.DaemonAlreadyRunning;
+
+            std.debug.print("(", .{});
+            defer std.debug.print("\n", .{});
+
+            var socket_addr = try std.net.Address.initUnix(socket_path);
+
+            var listener = try socket_addr.listen(.{});
+            defer listener.deinit();
+
+            std.debug.print("{s})\n", .{socket_path});
+
+            const client_handler = struct {
+                pub fn ch(conn: *std.net.Server.Connection) void {
+                    const stream = conn.stream;
+                    defer stream.close();
+                    
+
+                    while(!state.end_all) {
+                        var reader_buf: [1024]u8 = undefined;
+                        var writer_buf: [1024]u8 = undefined;
+                        var reader_ = stream.reader(&reader_buf);
+                        var reader: *std.Io.Reader = reader_.interface();
+                        var writer_ = stream.writer(&writer_buf);
+                        var writer: *std.Io.Writer = &writer_.interface;
+
+                        const bytes_read = reader.takeDelimiterExclusive('\n') catch |e| {
+                            if(error.EndOfStream == e) break;
+                            // std.log.err("{}\n", .{e});
+                            break;
+                        };
+
+                        if(std.mem.eql(u8, bytes_read, "quit")) { break; }
+                        else if(std.mem.eql(u8, bytes_read, "manual")) { state.change_mode(.manual); }
+                        else if(std.mem.eql(u8, bytes_read, "automatic")) { state.change_mode(.automatic); }
+                        else if(std.mem.eql(u8, bytes_read, "toggle")) { state.toggle_mode(); }
+                        else if(std.mem.eql(u8, bytes_read, "set")) { state.set(); }
+                        else if(std.mem.eql(u8, bytes_read, "stop")) { state.stop_app(); }
+                        else if(std.mem.eql(u8, bytes_read, "mode")) { 
+                            const msg = std.fmt.allocPrint(allocator, "{s}\n", .{ switch(state.mode) { .manual => "MANUAL", .automatic => "AUTOMATIC" } }) catch break;
+                            defer allocator.free(msg);
+                            writer.writeAll(msg) catch break;
+                            writer.flush() catch break;
+                            continue;
+                        }
+
+                        const msg = std.fmt.allocPrint(allocator, "OK\n", .{}) catch break;
+                        defer allocator.free(msg);
+                        writer.writeAll(msg) catch break;
+                        writer.flush() catch break;
+                    }
+                }
+            }.ch;
+
+            const acceptor = struct {
+                pub fn ac(listener_: *std.net.Server) !void {
+                    var clients_thread_pool: std.Thread.Pool = undefined;
+                    try clients_thread_pool.init(std.Thread.Pool.Options{
+                        .allocator = allocator,
+                        .n_jobs = 16,
+                    });
+                    defer clients_thread_pool.deinit();
+                    var wg: std.Thread.WaitGroup = undefined;
+
+                    while(!state.end_all) {
+                        var conn = listener_.accept() catch return;
+                        clients_thread_pool.spawnWg(&wg, client_handler, .{&conn});
+                        if(state.end_all) { wg.finish(); return; }
+                    }
+
+                    wg.wait();
+                }
+            }.ac;
+
+            const sensor_f = struct {
+                pub fn sen() !void {
+
+                    const sensor = find_acelerometer() catch return;
+
+                    var acc: Accell = undefined;
+
+                    var last: Direction = .up;
+                    var current: Direction = .up;
+
+                    var i: usize = 0;
+
+                    while(!state.end_all) {
+                        switch(state.mode) {
+                            .automatic => {
+                                if(state.anounce) {
+                                    std.debug.print("\n>> AUTOMATIC MODE\n", .{});
+                                    state.anounce = false;
+                                }
+                                acc = try get_acceleration(sensor);
+
+                                if(@abs(acc.y) >= @abs(acc.x)) { // horizontal
+                                    current = if(acc.y < 0) .up else .down;
+                                } else { // vertical
+                                    current = if(acc.x < 0) .left else .right;
+                                }
+
+                                if(debug) {
+                                    std.debug.print("\r\x1b[2KState: {s} {{{any}}} ", .{ current.to_string(), acc });
+                                    for(0..i+1) |_| { std.debug.print(".", .{}); }
+                                    i = (i + 1) % 3;
+                                }
+
+                                std.Thread.sleep(100*std.time.ns_per_ms);
+
+                                if(last != current) {
+                                    if(debug) std.debug.print("Rotating {s}...\n", .{ current.to_string() });
+                                    try rotate_screen(current);
+                                    last = current;
+                                }
+                            },
+                            .manual => {
+                                if(state.anounce) {
+                                    std.debug.print("\n>> MANUAL MODE\n", .{});
+                                    state.anounce = false;
+                                }
+
+                                if(state.to_set) {
+                                    std.debug.print("\n>> >> SET\n", .{});
+
+                                    acc = try get_acceleration(sensor);
+
+                                    if(@abs(acc.y) >= @abs(acc.x)) { // horizontal
+                                        current = if(acc.y < 0) .up else .down;
+                                    } else { // vertical
+                                        current = if(acc.x < 0) .left else .right;
+                                    }
+
+                                    try rotate_screen(current);
+
+                                    last = current;
+                                    state.to_set = false;
+                                }
+                            }
+                        }
+                    }
+                }
+            }.sen;
+
+            const acceptor_thread = try std.Thread.spawn(.{}, acceptor, .{ &listener });
+            const sensor_thread = try std.Thread.spawn(.{}, sensor_f, .{ });
+
+            while(!state.end_all) {} else {
+                struct {
+                    pub fn cc() void {
+                        const stream = std.net.connectUnixSocket(socket_path) catch return;
+                        stream.close();
+                    }
+                }.cc();
+
+                std.fs.deleteFileAbsolute(socket_path) catch return;
+            }
+
+            acceptor_thread.join();
+            sensor_thread.join();
+        },
+        .client => {
+            std.debug.print("{s}: client mode\n", .{ exec_name });
+            if(!socket_exists) return error.DaemonNotRunning;
+
+            const stream = try std.net.connectUnixSocket(socket_path);
+            defer stream.close();
+
+            var reader_buf: [1024]u8 = undefined;
+            var writer_buf: [1024]u8 = undefined;
+            var reader_ = stream.reader(&reader_buf);
+            var reader: *std.Io.Reader = reader_.interface();
+            var writer_ = stream.writer(&writer_buf);
+            var writer: *std.Io.Writer = &writer_.interface;
+
+            const Task = enum { automatic, manual, set, get_mode };
+            const task: Task = .automatic;
+
+            switch(task) {
+                .set => {
+                    try writer.print("set\n", .{});
+                    try writer.flush();
+                    const response = try reader.takeDelimiterExclusive('\n');
+                    if(!std.mem.eql(u8, "OK", response)) return error.FailerdToSet;
+                },
+                .manual => {
+                    try writer.print("manual\n", .{});
+                    try writer.flush();
+                    const response = try reader.takeDelimiterExclusive('\n');
+                    if(!std.mem.eql(u8, "OK", response)) return error.FailerdToSet;
+                },
+                .automatic => {
+                    try writer.print("automatic\n", .{});
+                    try writer.flush();
+                    const response = try reader.takeDelimiterExclusive('\n');
+                    if(!std.mem.eql(u8, "OK", response)) return error.FailerdToSet;
+                },
+                .get_mode => {
+                    try writer.print("mode\n", .{});
+                    try writer.flush();
+                    const response = try reader.takeDelimiterExclusive('\n');
+                    std.debug.print("{s}\n", .{response});
+                }
+            }
+        },
+        .interactive => {
+            std.debug.print("{s}: interactive mode\n", .{exec_name});
+            if(!socket_exists) return error.DaemonNotRunning;
+
+            const stream = try std.net.connectUnixSocket(socket_path);
+            defer stream.close();
+
+            var reader_buf: [1024]u8 = undefined;
+            var writer_buf: [1024]u8 = undefined;
+            var reader_ = stream.reader(&reader_buf);
+            var reader: *std.Io.Reader = reader_.interface();
+            var writer_ = stream.writer(&writer_buf);
+            var writer: *std.Io.Writer = &writer_.interface;
+
+            var stdin_file = std.fs.File.stdin();
+            defer stdin_file.close();
+            var stdin_reader = stdin_file.reader(&.{});
+            var stdin = &stdin_reader.interface;
+
+            var stdout_file = std.fs.File.stdout();
+            defer stdout_file.close();
+            var stdout_reader = stdout_file.writer(&.{});
+            var stdout = &stdout_reader.interface;
+
+
+            while(!state.end_all) {
+               try stdout.print("{s}>> ", .{ CLEAR_LINE });
+               try stdout.flush();
+
+               const req = try stdin.takeDelimiterExclusive('\n');
+               try writer.print("{s}\n", .{req});
+               try writer.flush();
+
+               const res = try reader.takeDelimiterExclusive('\n');
+               try stdout.print("{s}\n", .{res});
+               try stdout.flush();
+            }
+        }
+    }
+
+    // 1. Remove the socket file if it already exists, as it persists after program exit.
+    // std.fs.deleteFileAbsolute(socket_path) catch |err| switch (err) {
+    //     error.FileNotFound => {},
+    //     else => return err,
+    // };
+
+    
+
+
+
+
+
+
+
 
 
     

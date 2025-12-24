@@ -6,15 +6,20 @@ pub fn build(b: *std.Build) void {
     const target_query = std.Target.Query{ .cpu_arch = .x86_64, .os_tag = .linux, .cpu_model = .baseline };
     const optimize = b.standardOptimizeOption(.{});
 
+    const clap = b.dependency("clap", .{});
+
     const main = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = b.resolveTargetQuery(target_query),
         .optimize = optimize,
+        .imports = &[_]std.Build.Module.Import{
+            .{ .name = "clap", .module = clap.module("clap") },
+        }
     });
 
     const exe = b.addExecutable(.{
         .linkage = .static,
-        .name = "sr",
+        .name = "rotatron",
         .root_module = main,
     });
     // exe.setVerboseCC(true);
