@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    b.verbose = true;
+    // b.verbose = true;
 
     const target_query = std.Target.Query{ .cpu_arch = .x86_64, .os_tag = .linux, .cpu_model = .baseline };
     const optimize = b.standardOptimizeOption(.{});
@@ -22,8 +22,6 @@ pub fn build(b: *std.Build) void {
         .name = "rotatron",
         .root_module = main,
     });
-    // exe.setVerboseCC(true);
-    // exe.setVerboseLink(true);
 
     const run = b.addRunArtifact(exe);
     const run_step = b.step("run", "runs sr");

@@ -8,6 +8,8 @@ The development was carried out with the [Samsung Galaxy Book 4 360](https://www
 
 On a setup with i3 window manager there are a button in the polybar wich when holded (or mouse 3) will toggle modes between automatic and manual modes and when tapped (mouse 1) will set the orientation to the current accelerometer indicated position changing to manual mode.
 
+The appearance of the button inverts the background and foreground colors to indicate the mode (manual or automatic) the daemon is operating.
+
 > [WIP] The program contains hardcoded shell commands to correctly update my graphical elements such as wallpaper on feh and polybar. Its planned to have flags to specify those actions though the cli.
 
 ## Architecture
@@ -16,7 +18,7 @@ The software have two pieces: a `daemon` and `clients`. The `daemon` is meant to
 
 Operational wise, there are two modes of operation: `manual` and `automatic`. When in `automatic` mode the application will constantly poll the sensor data and automaticaly adjust the orientation. On `manual` mode the application only changes the orientation on client `set` command.
 
-Right now the code is able to automatically find the accelerômeter device and the display is known by the xrandr extension, but the findig of the touchscreen device is still a [TODO](##TODO).
+Right now the code is able to automatically find the accelerometer device and the display is known by the xrandr extension, but the findig of the touchscreen device is still a [TODO](##TODO).
 
 ## Usage
 
@@ -76,10 +78,11 @@ I hope all those issues can be solved on a Wayland environment, once the support
 
 ## TODO
 
-[ ] - automatically find the touch screen device on xinput
-[ ] - wayland support
-[ ] - remove hardcoded shell commands to reload graphical elements and implementation of flags to pass those commands through the cli
-[ ] - add screenshots and GIFS to this readme
-[ ] - add completions
-[ ] - create man page
+- [ ] automatically find the touch screen device on xinput
+- [ ] wayland support
+- [ ] remove hardcoded shell commands to reload graphical elements and implementation of flags to pass those commands through the cli
+- [ ] add screenshots and GIFS to this readme
+- [ ] add completions
+- [ ] create man page
+- [ ] automatic release though actions
 
