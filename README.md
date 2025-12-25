@@ -10,7 +10,7 @@ On a setup with i3 window manager there are a button in the polybar wich when ho
 
 The appearance of the button inverts the background and foreground colors to indicate the mode (manual or automatic) the daemon is operating.
 
-> [WIP] The program contains hardcoded shell commands to correctly update my graphical elements such as wallpaper on feh and polybar. Its planned to have flags to specify those actions though the cli.
+> [WIP] The program contains hardcoded shell commands to correctly update my graphical elements such as wallpaper on feh and polybar. Its planned to have flags to specify those actions through the cli.
 
 ## Architecture
 
@@ -84,5 +84,5 @@ I hope all those issues can be solved on a Wayland environment, once the support
 - [ ] add screenshots and GIFS to this readme
 - [ ] add completions
 - [ ] create man page
-- [ ] automatic release though actions
+- [ ] automatic release through actions
 
