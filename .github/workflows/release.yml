@@ -1,0 +1,53 @@
+name: Release CLI
+
+on:
+  push:
+    branches: [ "release" ]
+  pull_request:
+    branches: [ "release" ]
+
+jobs:
+  build_v0_15_1:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jetsung/install-zig@v0.0.3
+        with:
+          version: "0.15.1"
+
+      - name: Build
+        run: zig build -Doptimize=ReleaseFast
+
+      - name: Compress binary
+        run: |
+          cp zig-out/bin/rotatron . && tar czvf rotatron_v${{ github.run_number }}.tar.gz rotatron
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.run_number }}
+          release_name: Release ${{ github.run_number }}
+          draft: false
+          prerelease: false
+
+      - name: Upload Release Asset
+        id: upload-release-asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs
+          # object, which include a `upload_url`. See this blog post for more info:
+          # https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./rotatron_v${{ github.run_number }}.tar.gz
+          asset_name: rotatron_v${{ github.run_number }}.tar.gz
+          asset_content_type: application/tar
+
+      # TODO: makepkg and upload
+

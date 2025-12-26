@@ -57,11 +57,13 @@ rotatron <command> [args]...
 
 The underlying comunication mechanism uses messages exchanged bidirectionaly between daemon and client through an unix socket. The messages are aways initiated from the client and from each send from the client to the server there are a response from the server to the client. The messages and its returns are:
 
-- `automatic` -> `OK`: changes to automatic mode;
+- `quit` -> `OK`: closes connection;
 - `manual` -> `OK`: changes to manual mode;
+- `automatic` -> `OK`: changes to automatic mode;
 - `toggle` -> `OK`: toggles between automatic and manual mode;
 - `set [up|down|left|right]` -> `OK`: changes the mode to manual and sets direction to the giver one or else to the one given by the accelerometer device;
-- `mode` -> `MANUAL` | `AUTOMATIC`: queries the current mode of operation.
+- `stop` -> `OK`: stops daemon process;
+- `mode [automatic|manual]` -> `AUTOMATIC` | `MANUAL`: If argument is passed, change the operation mode of the daemon. If no arg, queries the current mode of operation.
 
 Any other string passed will be ignored. The `interactive` command is the best way to explore those valid messages.
 
@@ -84,5 +86,6 @@ I hope all those issues can be solved on a Wayland environment, once the support
 - [ ] add screenshots and GIFS to this readme
 - [ ] add completions
 - [ ] create man page
-- [ ] automatic release through actions
+- [x] automatic release through actions
+- [ ] fix signal handling (CTRL-C not working)
 

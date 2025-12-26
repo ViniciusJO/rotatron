@@ -5,10 +5,18 @@ const TOUCHSCREEN_DEVICE_NAME = "GXTP7936:00 27C6:0123";
 const CLEAR_LINE = "\r\x1b[2K";
 
 const Mode = enum { automatic, manual };
+const SetDirection = enum {
+    auto, up, right, down, left,
+    const Self = @This();
+    // pub fn to_direction(self: *Self) Direction {
+    //     return ;
+    // }
+};
 const State = struct {
     mode: Mode,
     anounce: bool,
-    to_set: bool,
+    to_set: ?SetDirection,
+    set_mutex: std.Thread.Mutex,
     end_all: bool,
 
     const Self = @This();
@@ -28,10 +36,14 @@ const State = struct {
         @atomicStore(bool, &self.anounce, true, .seq_cst);
     }
 
-    pub fn set(self: *Self) void {
+    pub fn set(self: *Self, d: SetDirection) void {
+        self.set_mutex.lock();
+        defer self.set_mutex.unlock();
+
         @atomicStore(Mode, &self.mode, Mode.manual, .seq_cst);
         @atomicStore(bool, &self.anounce, true, .seq_cst);
-        @atomicStore(bool, &self.to_set, true, .seq_cst);
+        // @atomicStore(SetDirection, @as(*SetDirection, @ptrCast(&self.to_set)), d, .seq_cst);
+        self.to_set = d;
     }
 
     pub fn stop_app(self: *Self) void {
@@ -68,7 +80,7 @@ const debug = false;
 
 const allocator = std.heap.page_allocator;
 const file_path = "$HOME/.cache/sr_state";
-var state = State{ .mode = .manual, .anounce = false, .to_set = false, .end_all = false };
+var state = State{ .mode = .manual, .anounce = false, .to_set = null, .set_mutex = undefined, .end_all = false };
 
 fn rotate_screen(direction: Direction) !void {
     const shell = struct { fn shell(cmd: []const []const u8) !void {
@@ -184,7 +196,7 @@ fn signal_handler(sig: i32) callconv(.c) void {
     std.debug.print("{s}", .{ CLEAR_LINE });
     switch(sig) {
         std.posix.SIG.USR1 => { state.toggle_mode(); },
-        std.posix.SIG.USR2 => { state.set(); },
+        std.posix.SIG.USR2 => { state.set(.auto); },
         std.posix.SIG.QUIT,
         std.posix.SIG.KILL,
         std.posix.SIG.INT => { state.stop_app(); },
@@ -214,14 +226,14 @@ fn usage(name: []u8) noreturn {
 }
 
 pub fn main() !void {
-    std.debug.print("\n", .{});
-    defer std.debug.print("\n", .{});
-
     const argsZ = try std.process.argsAlloc(allocator);
     const program_name = argsZ[0][0..argsZ[0].len];
 
     const RunMode = enum { daemon, client, interactive };
     var run_mode: RunMode = .daemon;
+
+    const Task = enum { automatic, manual, set, get_mode, toggle };
+    var task: Task = .automatic;
 
     if(argsZ.len > 1) {
         const command = argsZ[1][0..argsZ[1].len];
@@ -229,8 +241,39 @@ pub fn main() !void {
             run_mode = .daemon;
         } else if(std.mem.eql(u8, "interactive", command)) {
             run_mode = .interactive;
-        } else if(std.mem.eql(u8, "client", command)) {
+        } else if(std.mem.eql(u8, "set", command)) {
             run_mode = .client;
+            task = .set;
+            state.set_mutex.lock();
+            defer state.set_mutex.unlock();
+            if(argsZ.len > 2) {
+                const dir = argsZ[2][0..argsZ[2].len];
+
+                if(std.mem.eql(u8, "up", dir)) { state.to_set = .up; }
+                else if(std.mem.eql(u8, "down", dir)) { state.to_set = .down; }
+                else if(std.mem.eql(u8, "left", dir)) { state.to_set = .left; }
+                else if(std.mem.eql(u8, "right", dir)) { state.to_set = .right; }
+                else {
+                    std.log.err("error: direction \"{s}\" not recognized", .{ dir });
+                    std.posix.exit(1);
+                }
+            } else state.to_set = .auto;
+        } else if(std.mem.eql(u8, "toggle", command)) {
+            run_mode = .client;
+            task = .toggle;
+        } else if(std.mem.eql(u8, "mode", command)) {
+            run_mode = .client;
+
+            if(argsZ.len > 2) {
+                const mode = argsZ[2][0..argsZ[2].len];
+
+                if(std.mem.eql(u8, "automatic", mode)) { task = .automatic; }
+                else if(std.mem.eql(u8, "manual", mode)) { task = .manual; }
+                else {
+                    std.log.err("error: mode \"{s}\" not recognized", .{ mode });
+                    std.posix.exit(1);
+                }
+            } else task = .get_mode;
         } else usage(program_name);
     } else usage(program_name);
 
@@ -285,15 +328,19 @@ pub fn main() !void {
                         else if(std.mem.eql(u8, bytes_read, "manual")) { state.change_mode(.manual); }
                         else if(std.mem.eql(u8, bytes_read, "automatic")) { state.change_mode(.automatic); }
                         else if(std.mem.eql(u8, bytes_read, "toggle")) { state.toggle_mode(); }
-                        else if(std.mem.eql(u8, bytes_read, "set")) { state.set(); }
                         else if(std.mem.eql(u8, bytes_read, "stop")) { state.stop_app(); }
+                        else if(std.mem.eql(u8, bytes_read, "set")) { state.set(.auto); }
+                        else if(std.mem.eql(u8, bytes_read, "set up")) { state.set(.up); }
+                        else if(std.mem.eql(u8, bytes_read, "set down")) { state.set(.down); }
+                        else if(std.mem.eql(u8, bytes_read, "set left")) { state.set(.left); }
+                        else if(std.mem.eql(u8, bytes_read, "set right")) { state.set(.right); }
                         else if(std.mem.eql(u8, bytes_read, "mode")) { 
                             const msg = std.fmt.allocPrint(allocator, "{s}\n", .{ switch(state.mode) { .manual => "MANUAL", .automatic => "AUTOMATIC" } }) catch break;
                             defer allocator.free(msg);
                             writer.writeAll(msg) catch break;
                             writer.flush() catch break;
                             continue;
-                        }
+                        } else continue;
 
                         const msg = std.fmt.allocPrint(allocator, "OK\n", .{}) catch break;
                         defer allocator.free(msg);
@@ -370,21 +417,32 @@ pub fn main() !void {
                                     state.anounce = false;
                                 }
 
-                                if(state.to_set) {
+                                state.set_mutex.lock();
+                                defer state.set_mutex.unlock();
+
+                                if(state.to_set) |d| {
                                     std.debug.print("\n>> >> SET\n", .{});
 
-                                    acc = try get_acceleration(sensor);
+                                    if(d == .auto) {
+                                        acc = try get_acceleration(sensor);
 
-                                    if(@abs(acc.y) >= @abs(acc.x)) { // horizontal
-                                        current = if(acc.y < 0) .up else .down;
-                                    } else { // vertical
-                                        current = if(acc.x < 0) .left else .right;
-                                    }
+                                        if(@abs(acc.y) >= @abs(acc.x)) { // horizontal
+                                            current = if(acc.y < 0) .up else .down;
+                                        } else { // vertical
+                                            current = if(acc.x < 0) .left else .right;
+                                        }
+                                    } else current = switch(d) {
+                                        .auto => .up,
+                                        .up => .up,
+                                        .down => .down,
+                                        .left => .left,
+                                        .right => .right,
+                                    };
 
                                     try rotate_screen(current);
 
                                     last = current;
-                                    state.to_set = false;
+                                    state.to_set = null;
                                 }
                             }
                         }
@@ -410,7 +468,6 @@ pub fn main() !void {
             sensor_thread.join();
         },
         .client => {
-            std.debug.print("{s}: client mode\n", .{ exec_name });
             if(!socket_exists) return error.DaemonNotRunning;
 
             const stream = try std.net.connectUnixSocket(socket_path);
@@ -423,12 +480,19 @@ pub fn main() !void {
             var writer_ = stream.writer(&writer_buf);
             var writer: *std.Io.Writer = &writer_.interface;
 
-            const Task = enum { automatic, manual, set, get_mode };
-            const task: Task = .automatic;
-
             switch(task) {
                 .set => {
-                    try writer.print("set\n", .{});
+                    state.set_mutex.lock();
+                    defer state.set_mutex.unlock();
+                    
+                    switch(state.to_set.?) {
+                        .auto => try writer.print("set\n", .{}),
+                        .up => try writer.print("set up\n", .{}),
+                        .down => try writer.print("set down\n", .{}),
+                        .left => try writer.print("set left\n", .{}),
+                        .right => try writer.print("set right\n", .{}),
+                    }
+
                     try writer.flush();
                     const response = try reader.takeDelimiterExclusive('\n');
                     if(!std.mem.eql(u8, "OK", response)) return error.FailerdToSet;
@@ -437,13 +501,21 @@ pub fn main() !void {
                     try writer.print("manual\n", .{});
                     try writer.flush();
                     const response = try reader.takeDelimiterExclusive('\n');
-                    if(!std.mem.eql(u8, "OK", response)) return error.FailerdToSet;
+                    if(!std.mem.eql(u8, "OK", response)) return error.FailerdToSetMode;
+                    std.debug.print("MANUAL\n", .{});
                 },
                 .automatic => {
                     try writer.print("automatic\n", .{});
                     try writer.flush();
                     const response = try reader.takeDelimiterExclusive('\n');
-                    if(!std.mem.eql(u8, "OK", response)) return error.FailerdToSet;
+                    if(!std.mem.eql(u8, "OK", response)) return error.FailerdToSetMode;
+                    std.debug.print("AUTOMATIC\n", .{});
+                },
+                .toggle => {
+                    try writer.print("toggle\n", .{});
+                    try writer.flush();
+                    const response = try reader.takeDelimiterExclusive('\n');
+                    if(!std.mem.eql(u8, "OK", response)) return error.FailerdToToggle;
                 },
                 .get_mode => {
                     try writer.print("mode\n", .{});
@@ -477,6 +549,15 @@ pub fn main() !void {
             var stdout_reader = stdout_file.writer(&.{});
             var stdout = &stdout_reader.interface;
 
+            // _ = &writer;
+            // _ = &stdout;
+
+            // const sz1 = try stdin.stream(writer, .nothing);
+            // const sz2 = try reader.stream(stdout, .nothing);
+
+            // std.debug.print("{}, {}\n", .{ sz1, sz2 });
+
+            // while(!state.end_all) {}
 
             while(!state.end_all) {
                try stdout.print("{s}>> ", .{ CLEAR_LINE });
